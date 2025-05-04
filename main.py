@@ -16,7 +16,7 @@ import win32con
 import win32api
 from fake_useragent import UserAgent
 import logging
-from ctypes import Structure, c_ulong, c_ushort, c_short, POINTER, windll, Union, c_void_p, sizeof, cast, pointer
+from ctypes import Structure, c_ulong, c_ushort, c_short, POINTER, windll, Union, c_void_p, sizeof, c_long, byref
 import time
 
 # Инициализация бота и диспетчера
@@ -114,62 +114,60 @@ def send_key(key):
             win32api.keybd_event(key, 0, 0, 0)
             win32api.keybd_event(key, 0, win32con.KEYEVENTF_KEYUP, 0)
 
-# Добавляем структуры для SendInput
-LONG = c_long = int
-
+# Исправляем определение структур
 class MOUSEINPUT(Structure):
-    _fields_ = [
-        ("dx", LONG),
-        ("dy", LONG),
+    _fields_ = (
+        ("dx", c_long),
+        ("dy", c_long),
         ("mouseData", c_ulong),
         ("dwFlags", c_ulong),
         ("time", c_ulong),
-        ("dwExtraInfo", POINTER(c_ulong))
-    ]
+        ("dwExtraInfo", c_void_p)
+    )
 
 class KEYBDINPUT(Structure):
-    _fields_ = [
+    _fields_ = (
         ("wVk", c_ushort),
         ("wScan", c_ushort),
         ("dwFlags", c_ulong),
         ("time", c_ulong),
-        ("dwExtraInfo", POINTER(c_ulong))
-    ]
+        ("dwExtraInfo", c_void_p)
+    )
 
 class HARDWAREINPUT(Structure):
-    _fields_ = [
+    _fields_ = (
         ("uMsg", c_ulong),
         ("wParamL", c_short),
         ("wParamH", c_ushort)
-    ]
+    )
 
-class _INPUT_UNION(Union):
-    _fields_ = [
+class INPUT_UNION(Union):
+    _fields_ = (
         ("mi", MOUSEINPUT),
         ("ki", KEYBDINPUT),
-        ("hi", HARDWAREINPUT)
-    ]
+        ("hi", HARDWAREINPUT),
+    )
 
 class INPUT(Structure):
-    _fields_ = [
+    _fields_ = (
         ("type", c_ulong),
-        ("union", _INPUT_UNION)
-    ]
+        ("union", INPUT_UNION),
+    )
 
 def send_key_press(key_code):
     """Отправка нажатия клавиши через SendInput"""
     try:
         extra = c_ulong(0)
         ii_ = INPUT_UNION()
-        ii_.ki = KEYBDINPUT(key_code, 0, 0, 0, pointer(extra))
+        ii_.ki = KEYBDINPUT(key_code, 0, 0, 0, byref(extra))
         x = INPUT(c_ulong(1), ii_)
-        windll.user32.SendInput(1, pointer(x), sizeof(x))
+        windll.user32.SendInput(1, byref(x), sizeof(x))
         
         time.sleep(0.1)  # Небольшая задержка между нажатием и отпусканием
         
-        ii_.ki = KEYBDINPUT(key_code, 0, 0x0002, 0, pointer(extra))  # KEYEVENTF_KEYUP
+        ii_.ki = KEYBDINPUT(key_code, 0, 0x0002, 0, byref(extra))  # KEYEVENTF_KEYUP
         x = INPUT(c_ulong(1), ii_)
-        windll.user32.SendInput(1, pointer(x), sizeof(x))
+        windll.user32.SendInput(1, byref(x), sizeof(x))
         
     except Exception as e:
         logger.error(f"Ошибка при отправке клавиши через SendInput: {e}")
@@ -290,7 +288,7 @@ async def process_anime_selection(callback_query: types.CallbackQuery):
     
     # Через небольшую задержку включаем полноэкранный режим
     await asyncio.sleep(3)
-    pyautogui.press('f')
+    send_key_press(0x70)  # VK_F1 = 0x70, соответствует клавише F
     
     await callback_query.message.answer("Аниме запущено в полноэкранном режиме")
     await callback_query.answer()
