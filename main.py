@@ -16,7 +16,7 @@ import win32con
 import win32api
 from fake_useragent import UserAgent
 import logging
-from ctypes import Structure, c_ulong, c_ushort, c_short, POINTER, windll, Union, c_void_p, sizeof, c_long, byref
+from ctypes import Structure, c_ulong, c_ushort, c_short, POINTER, windll, Union, c_void_p, sizeof, c_long, byref, pointer
 import time
 from voice_handler import VoiceHandler
 
@@ -435,6 +435,9 @@ async def handle_voice(message: types.Message, state: FSMContext):
                 await processing_msg.edit_text("❌ Не удалось распознать команду")
                 return
                 
+            # Парсим команду до обработки
+            command, query = voice_handler.parse_command(text)
+            
             # Продолжаем обработку команды...
             current_state = await state.get_state()
             if current_state == "SearchStates:waiting_for_choice":
@@ -451,11 +454,11 @@ async def handle_voice(message: types.Message, state: FSMContext):
                     else:
                         await message.answer("❌ Неверный номер. Пожалуйста, выберите существующий вариант.")
                         return
-            
+
+            # Обрабатываем команды
             if command == "search":
                 results = voice_handler.search_anime(query)
                 if results:
-                    # Сохраняем результаты поиска для этого пользователя
                     search_results[message.from_user.id] = results
                     await state.set_state(SearchStates.waiting_for_choice)
             elif command == "forward":
