@@ -10,8 +10,11 @@ from bs4 import BeautifulSoup
 import webbrowser
 from aiogram.utils.markdown import hbold, hitalic
 from database import Database
-import pyautogui
 import subprocess
+import win32gui
+import win32con
+import win32api
+from fake_useragent import UserAgent
 
 # Инициализация бота и диспетчера
 bot = Bot(token=TOKEN)
@@ -82,35 +85,61 @@ async def shutdown_pc(message: types.Message):
     subprocess.run(["shutdown", "/s", "/t", "10", "/c", "Компьютер будет выключен через 10 секунд"])
     await message.answer("⚠️ Компьютер будет выключен через 10 секунд")
 
-# Обработчики кнопок управления аниме
+def find_browser_window():
+    """Поиск и активация окна браузера"""
+    def callback(hwnd, windows):
+        if win32gui.IsWindowVisible(hwnd):
+            title = win32gui.GetWindowText(hwnd).lower()
+            if 'chrome' in title or 'firefox' in title or 'edge' in title:
+                windows.append(hwnd)
+        return True
+    
+    windows = []
+    win32gui.EnumWindows(callback, windows)
+    if windows:
+        win32gui.SetForegroundWindow(windows[0])
+        return True
+    return False
+
+def send_key(key):
+    """Отправка нажатия клавиши в активное окно"""
+    if find_browser_window():
+        if isinstance(key, str):
+            win32api.keybd_event(ord(key.upper()), 0, 0, 0)
+            win32api.keybd_event(ord(key.upper()), 0, win32con.KEYEVENTF_KEYUP, 0)
+        else:
+            win32api.keybd_event(key, 0, 0, 0)
+            win32api.keybd_event(key, 0, win32con.KEYEVENTF_KEYUP, 0)
+
+# Обновляем обработчики кнопок
 @dp.message(F.text == "⏸ Пауза/Продолжить")
 async def toggle_pause(message: types.Message):
     db.log_command(message.from_user.id, "pause_play")
-    pyautogui.press('space')
+    send_key(win32con.VK_SPACE)
     await message.answer("⏸ Пауза/Продолжить воспроизведение")
 
 @dp.message(F.text == "⏩ Вперед 10 сек")
 async def forward_10(message: types.Message):
     db.log_command(message.from_user.id, "forward")
-    pyautogui.press('right')
+    send_key(win32con.VK_RIGHT)
     await message.answer("⏩ Перемотка вперед на 10 секунд")
 
 @dp.message(F.text == "⏪ Назад 10 сек")
 async def backward_10(message: types.Message):
     db.log_command(message.from_user.id, "backward")
-    pyautogui.press('left')
+    send_key(win32con.VK_LEFT)
     await message.answer("⏪ Перемотка назад на 10 секунд")
 
 @dp.message(F.text == "⬅️ Предыдущая серия")
 async def previous_episode(message: types.Message):
     db.log_command(message.from_user.id, "previous_episode")
-    pyautogui.press('p')  # предполагаем, что 'p' - клавиша для предыдущей серии
+    send_key('P')
     await message.answer("⬅️ Включена предыдущая серия")
 
 @dp.message(F.text == "➡️ Следующая серия")
 async def next_episode(message: types.Message):
     db.log_command(message.from_user.id, "next_episode")
-    pyautogui.press('n')
+    send_key('N')
     await message.answer("➡️ Включена следующая серия")
 
 @dp.message(F.text == "🔍 Поиск аниме")
@@ -125,30 +154,45 @@ async def process_title(message: types.Message, state: FSMContext):
     
     await message.answer(f"🔍 {hitalic('Ищу аниме')} {hbold(search_query)}...", parse_mode="HTML")
     
-    # Поиск на RUTUBE
+    # Настройка запроса
+    ua = UserAgent()
+    headers = {
+        'User-Agent': ua.random,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
+        'Connection': 'keep-alive',
+    }
+    
     url = f"https://rutube.ru/search/?query={search_query}+аниме"
-    response = requests.get(url)
+    response = requests.get(url, headers=headers)
     soup = BeautifulSoup(response.text, 'html.parser')
     
-    # Найти все результаты поиска (примерная структура, может потребоваться адаптация)
-    results = soup.find_all('div', class_='search-item')
+    # Обновленные селекторы для поиска
+    results = soup.find_all('div', {'class': ['video-card', 'search-item', 'video-item']})
     
     if not results:
-        await message.answer("Ничего не найдено")
+        await message.answer("❌ Ничего не найдено. Попробуйте другой запрос.")
         await state.clear()
         return
 
     keyboard = InlineKeyboardMarkup(row_width=1)
     
-    for result in results[:5]:  # Ограничим до 5 результатов
-        title = result.find('a').text
-        link = "https://rutube.ru" + result.find('a')['href']
+    for result in results[:5]:
+        title_elem = result.find(['a', 'div'], {'class': ['video-card__link', 'search-item__title', 'video-item__title']})
+        if not title_elem:
+            continue
+            
+        title = title_elem.get_text().strip()
+        link = title_elem.get('href', '')
+        if not link.startswith('http'):
+            link = "https://rutube.ru" + link
+            
         keyboard.add(InlineKeyboardButton(
-            text=f"🎬 {title}", 
-            callback_data=f"anime:{link}:{title}"
+            text=f"🎬 {title[:50]}...", 
+            callback_data=f"anime:{link}:{title[:50]}"
         ))
 
-    await message.answer("Найденные аниме:", reply_markup=keyboard)
+    await message.answer("🎯 Найденные аниме:", reply_markup=keyboard)
     await state.clear()
 
 @dp.callback_query(lambda c: c.data.startswith('anime:'))
