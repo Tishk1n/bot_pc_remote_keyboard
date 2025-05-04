@@ -221,23 +221,35 @@ def find_video_window():
             if win32gui.IsWindowVisible(hwnd):
                 try:
                     title = win32gui.GetWindowText(hwnd).lower()
-                    if any(x in title for x in ['rutube', 'chrome', 'firefox', 'edge', 'смотреть']):
+                    # Расширяем список поисковых терминов
+                    search_terms = ['rutube', 'chrome', 'firefox', 'edge', 'смотреть', 
+                                 'видео', 'video', 'anime', 'аниме', 'серия', 'episode']
+                    if any(x in title for x in search_terms):
                         windows.append(hwnd)
                         return False
                 except Exception:
                     pass
             return True
-        
+
+        # Сначала ищем по конкретному заголовку
+        hwnd = win32gui.FindWindow(None, "Rutube")
+        if hwnd and win32gui.IsWindowVisible(hwnd):
+            return hwnd
+
+        # Если не нашли, ищем среди всех окон
         windows = []
         win32gui.EnumWindows(callback, windows)
         
-        # Добавляем таймаут
-        start_time = time.time()
-        while not windows and time.time() - start_time < 3:  # 3 секунды таймаут
-            time.sleep(0.1)
-            win32gui.EnumWindows(callback, windows)
+        # Если нашли хотя бы одно окно, возвращаем первое
+        if windows:
+            return windows[0]
             
-        return windows[0] if windows else None
+        # Если все еще не нашли, пробуем найти по классу окна
+        hwnd = win32gui.FindWindow("Chrome_WidgetWin_1", None)
+        if hwnd:
+            return hwnd
+            
+        return None
         
     except Exception as e:
         logger.error(f"Ошибка при поиске окна: {e}")
@@ -248,37 +260,45 @@ def send_input_key(vk_code):
     try:
         hwnd = find_video_window()
         if not hwnd:
+            logger.error("Не удалось найти окно видео")
             return False
             
-        # Активируем окно
         try:
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            # Активируем окно
+            if win32gui.IsIconic(hwnd):  # Если окно свернуто
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
             win32gui.SetForegroundWindow(hwnd)
             time.sleep(0.5)  # Ждем активации окна
+            
+            # Отправляем клавишу разными способами
+            # 1. Через SendInput
+            scan_code = win32api.MapVirtualKey(vk_code, 0)
+            extra = c_ulong(0)
+            ii_ = INPUT_UNION()
+            ii_.ki = KEYBDINPUT(vk_code, scan_code, 0, 0, pointer(extra))
+            x = INPUT(c_ulong(1), ii_)
+            windll.user32.SendInput(1, pointer(x), sizeof(x))
+            time.sleep(0.1)
+            ii_.ki = KEYBDINPUT(vk_code, scan_code, 0x0002, 0, pointer(extra))
+            x = INPUT(c_ulong(1), ii_)
+            windll.user32.SendInput(1, pointer(x), sizeof(x))
+            
+            # 2. Через PostMessage
+            win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
+            time.sleep(0.1)
+            win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
+            
+            # 3. Через keybd_event
+            win32api.keybd_event(vk_code, scan_code, 0, 0)
+            time.sleep(0.1)
+            win32api.keybd_event(vk_code, scan_code, win32con.KEYEVENTF_KEYUP, 0)
+            
+            return True
+            
         except Exception as e:
             logger.error(f"Ошибка активации окна: {e}")
             return False
-
-        # Получаем скан-код клавиши
-        scan_code = win32api.MapVirtualKey(vk_code, 0)
-        
-        # Структуры для SendInput
-        extra = c_ulong(0)
-        ii_ = INPUT_UNION()
-        
-        # Нажатие клавиши
-        ii_.ki = KEYBDINPUT(0, scan_code, 0x0008, 0, pointer(extra))  # KEYEVENTF_SCANCODE
-        x = INPUT(c_ulong(1), ii_)
-        windll.user32.SendInput(1, pointer(x), sizeof(x))
-        
-        time.sleep(0.1)
-        
-        # Отпускание клавиши
-        ii_.ki = KEYBDINPUT(0, scan_code, 0x0008 | 0x0002, 0, pointer(extra))  # KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
-        x = INPUT(c_ulong(1), ii_)
-        windll.user32.SendInput(1, pointer(x), sizeof(x))
-        
-        return True
+            
     except Exception as e:
         logger.error(f"Ошибка отправки клавиши: {e}")
         return False

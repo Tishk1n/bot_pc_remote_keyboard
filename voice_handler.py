@@ -3,33 +3,44 @@ import pyttsx3
 import json
 import requests
 from fake_useragent import UserAgent
+import logging
+from speech_config import SPEECH_RECOGNITION_SETTINGS, VOICE_COMMANDS
+
+logger = logging.getLogger(__name__)
 
 class VoiceHandler:
     def __init__(self):
         self.recognizer = sr.Recognizer()
         self.engine = pyttsx3.init()
+        # Настройка распознавания
+        self.recognizer.energy_threshold = 300  # Увеличиваем чувствительность
+        self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.pause_threshold = 0.8  # Уменьшаем паузу между словами
         # Настройка голоса
-        self.engine.setProperty('rate', 180)  # Скорость речи
-        self.engine.setProperty('volume', 0.9)  # Громкость
+        self.engine.setProperty('rate', 180)
+        self.engine.setProperty('volume', 0.9)
 
     def recognize_command(self, audio_data):
         try:
-            # Увеличиваем таймаут и добавляем настройки для лучшего распознавания
             text = self.recognizer.recognize_google(
-                audio_data, 
-                language='ru-RU',
-                show_all=False,
-                with_confidence=True
+                audio_data,
+                language=SPEECH_RECOGNITION_SETTINGS['language'],
+                show_all=True  # Получаем все варианты распознавания
             )
             
-            # Если получили tuple с уверенностью
-            if isinstance(text, tuple):
-                text, confidence = text
-                if confidence < 0.5:  # Если уверенность низкая
-                    return None
-                return text.lower()
+            if not text:
+                return None
+                
+            # Если получили список альтернатив
+            if isinstance(text, dict) and 'alternative' in text:
+                # Берем наиболее вероятный вариант
+                return text['alternative'][0]['transcript'].lower()
             
-            return text.lower() if text else None
+            # Если получили просто строку
+            if isinstance(text, str):
+                return text.lower()
+                
+            return None
             
         except sr.UnknownValueError:
             logger.error("Не удалось распознать речь")
@@ -94,19 +105,26 @@ class VoiceHandler:
         if not text:
             return None, None
             
-        # Проверяем, является ли текст числом (выбор варианта)
-        if text.strip().isdigit():
+        # Проверяем числа для выбора варианта
+        if text.strip().isdigit() or any(word in text.lower() for word in ['один', 'два', 'три', 'четыре', 'пять']):
+            number_map = {
+                'один': 1, 'два': 2, 'три': 3, 'четыре': 4, 'пять': 5,
+                '1': 1, '2': 2, '3': 3, '4': 4, '5': 5
+            }
+            for word, num in number_map.items():
+                if word in text.lower():
+                    return "select", num
             return "select", int(text.strip())
             
-        if "найди аниме" in text:
-            query = text.replace("найди аниме", "").strip()
-            return "search", query
-        elif "перемотай вперёд" in text:
-            return "forward", None
-        elif "перемотай назад" in text:
-            return "backward", None
-        elif "следующая серия" in text:
-            return "next", None
-        elif "предыдущая серия" in text:
-            return "previous", None
+        # Проверяем команды из конфига
+        for command, phrases in VOICE_COMMANDS.items():
+            if any(phrase in text for phrase in phrases):
+                if command == "search":
+                    # Извлекаем название аниме после команды поиска
+                    for phrase in phrases:
+                        if phrase in text:
+                            query = text.replace(phrase, "").strip()
+                            return command, query
+                return command, None
+                
         return None, None
