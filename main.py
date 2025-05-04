@@ -10,6 +10,8 @@ from bs4 import BeautifulSoup
 import webbrowser
 from aiogram.utils.markdown import hbold, hitalic
 from database import Database
+import pyautogui
+import subprocess
 
 # Инициализация бота и диспетчера
 bot = Bot(token=TOKEN)
@@ -29,9 +31,9 @@ main_kb = ReplyKeyboardMarkup(
 
 anime_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="⏩ Вперед 10 сек")],
-        [KeyboardButton(text="⏪ Назад 10 сек")],
-        [KeyboardButton(text="➡️ Следующая серия")],
+        [KeyboardButton(text="⏸ Пауза/Продолжить")],
+        [KeyboardButton(text="⏩ Вперед 10 сек"), KeyboardButton(text="⏪ Назад 10 сек")],
+        [KeyboardButton(text="⬅️ Предыдущая серия"), KeyboardButton(text="➡️ Следующая серия")],
         [KeyboardButton(text="🔍 Поиск аниме")]
     ],
     resize_keyboard=True
@@ -74,26 +76,42 @@ async def anime_menu(message: types.Message):
     )
 
 # Обработчик кнопки "Выключить компьютер"
-@dp.message(F.text == "Выключить компьютер")
+@dp.message(F.text == "⚡️ Выключить компьютер")
 async def shutdown_pc(message: types.Message):
-    os.system("shutdown /s /t 1")
-    await message.answer("Компьютер будет выключен.")
+    db.log_command(message.from_user.id, "shutdown")
+    subprocess.run(["shutdown", "/s", "/t", "10", "/c", "Компьютер будет выключен через 10 секунд"])
+    await message.answer("⚠️ Компьютер будет выключен через 10 секунд")
 
 # Обработчики кнопок управления аниме
+@dp.message(F.text == "⏸ Пауза/Продолжить")
+async def toggle_pause(message: types.Message):
+    db.log_command(message.from_user.id, "pause_play")
+    pyautogui.press('space')
+    await message.answer("⏸ Пауза/Продолжить воспроизведение")
+
 @dp.message(F.text == "⏩ Вперед 10 сек")
 async def forward_10(message: types.Message):
-    os.system("xdotool key Right")
-    await message.answer("Перемотка вперед на 10 секунд")
+    db.log_command(message.from_user.id, "forward")
+    pyautogui.press('right')
+    await message.answer("⏩ Перемотка вперед на 10 секунд")
 
 @dp.message(F.text == "⏪ Назад 10 сек")
 async def backward_10(message: types.Message):
-    os.system("xdotool key Left")
-    await message.answer("Перемотка назад на 10 секунд")
+    db.log_command(message.from_user.id, "backward")
+    pyautogui.press('left')
+    await message.answer("⏪ Перемотка назад на 10 секунд")
+
+@dp.message(F.text == "⬅️ Предыдущая серия")
+async def previous_episode(message: types.Message):
+    db.log_command(message.from_user.id, "previous_episode")
+    pyautogui.press('p')  # предполагаем, что 'p' - клавиша для предыдущей серии
+    await message.answer("⬅️ Включена предыдущая серия")
 
 @dp.message(F.text == "➡️ Следующая серия")
 async def next_episode(message: types.Message):
-    os.system("xdotool key n")
-    await message.answer("Включена следующая серия")
+    db.log_command(message.from_user.id, "next_episode")
+    pyautogui.press('n')
+    await message.answer("➡️ Включена следующая серия")
 
 @dp.message(F.text == "🔍 Поиск аниме")
 async def search_anime(message: types.Message, state: FSMContext):
@@ -150,7 +168,7 @@ async def process_anime_selection(callback_query: types.CallbackQuery):
     
     # Через небольшую задержку включаем полноэкранный режим
     await asyncio.sleep(3)
-    os.system("xdotool key F")
+    pyautogui.press('f')
     
     await callback_query.message.answer("Аниме запущено в полноэкранном режиме")
     await callback_query.answer()
