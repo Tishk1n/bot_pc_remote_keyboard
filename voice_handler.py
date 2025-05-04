@@ -1,120 +1,77 @@
 import speech_recognition as sr
 import pyttsx3
-import threading
-import re
+import json
 import requests
 from fake_useragent import UserAgent
-import logging
 
-logger = logging.getLogger(__name__)
-
-class VoiceAssistant:
-    def __init__(self, key_handler):
+class VoiceHandler:
+    def __init__(self):
         self.recognizer = sr.Recognizer()
-        self.microphone = sr.Microphone()
         self.engine = pyttsx3.init()
-        self.key_handler = key_handler
-        self.setup_voice()
-        
-    def setup_voice(self):
-        """Настройка голоса"""
+        # Настройка голоса
         self.engine.setProperty('rate', 180)  # Скорость речи
         self.engine.setProperty('volume', 0.9)  # Громкость
-        
-        # Выбор русского женского голоса, если доступен
-        voices = self.engine.getProperty('voices')
-        for voice in voices:
-            if "russian" in voice.name.lower():
-                self.engine.setProperty('voice', voice.id)
-                break
+
+    def recognize_command(self, audio_data):
+        try:
+            text = self.recognizer.recognize_google(audio_data, language='ru-RU')
+            return text.lower()
+        except sr.UnknownValueError:
+            return None
+        except sr.RequestError:
+            return None
 
     def speak(self, text):
-        """Озвучивание текста"""
         self.engine.say(text)
         self.engine.runAndWait()
 
     def search_anime(self, query):
-        """Поиск аниме и озвучивание результатов"""
+        ua = UserAgent()
+        headers = {
+            'User-Agent': ua.random,
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+        
+        url = f"https://rutube.ru/api/search/video/?query={query}+аниме&format=json"
         try:
-            headers = {
-                'User-Agent': UserAgent().random,
-                'Accept': 'application/json',
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-            
-            url = f"https://rutube.ru/api/search/video/?query={query}+аниме&format=json"
             response = requests.get(url, headers=headers)
             data = response.json()
+            results = data.get('results', [])[:3]
             
-            if not data.get('results'):
+            if not results:
                 self.speak("К сожалению, ничего не найдено")
-                return
+                return None
             
-            results = data['results'][:5]
-            self.speak("Нашёл следующие видео на Рутубе:")
-            
+            response_text = "Нашел следующие видео на Rutube. Скажите номер видео, которое хотите посмотреть:\n"
             for i, result in enumerate(results, 1):
                 title = result.get('title', '').strip()
-                self.speak(f"Номер {i}: {title}")
-                
+                response_text += f"{i}. {title}\n"
+            
+            self.speak(response_text)
+            return results
+            
         except Exception as e:
-            logger.error(f"Ошибка при голосовом поиске: {e}")
             self.speak("Произошла ошибка при поиске")
+            return None
 
-    def process_command(self, command):
-        """Обработка голосовой команды"""
-        command = command.lower()
-        
-        if "перемотай вперёд" in command or "вперед" in command:
-            self.speak("Перематываю вперёд")
-            self.key_handler(0x27)  # VK_RIGHT
+    def parse_command(self, text):
+        if not text:
+            return None, None
             
-        elif "перемотай назад" in command or "назад" in command:
-            self.speak("Перематываю назад")
-            self.key_handler(0x25)  # VK_LEFT
+        # Проверяем, является ли текст числом (выбор варианта)
+        if text.strip().isdigit():
+            return "select", int(text.strip())
             
-        elif "следующая серия" in command:
-            self.speak("Включаю следующую серию")
-            self.key_handler(0x4E)  # 'N'
-            
-        elif "предыдущая серия" in command:
-            self.speak("Включаю предыдущую серию")
-            self.key_handler(0x50)  # 'P'
-            
-        elif "найди аниме" in command:
-            # Извлекаем название аниме из команды
-            match = re.search(r"найди аниме\s+(.+)", command)
-            if match:
-                query = match.group(1)
-                self.search_anime(query)
-            else:
-                self.speak("Пожалуйста, укажите название аниме для поиска")
-
-    def listen(self):
-        """Прослушивание микрофона"""
-        try:
-            with self.microphone as source:
-                self.recognizer.adjust_for_ambient_noise(source)
-                print("Слушаю...")
-                audio = self.recognizer.listen(source)
-                
-                try:
-                    command = self.recognizer.recognize_google(audio, language="ru-RU")
-                    print(f"Распознано: {command}")
-                    self.process_command(command)
-                except sr.UnknownValueError:
-                    pass  # Игнорируем неразборчивую речь
-                except sr.RequestError as e:
-                    logger.error(f"Ошибка распознавания: {e}")
-                    
-        except Exception as e:
-            logger.error(f"Ошибка при прослушивании: {e}")
-
-    def start_listening(self):
-        """Запуск бесконечного прослушивания в отдельном потоке"""
-        def listen_loop():
-            while True:
-                self.listen()
-        
-        thread = threading.Thread(target=listen_loop, daemon=True)
-        thread.start()
+        if "найди аниме" in text:
+            query = text.replace("найди аниме", "").strip()
+            return "search", query
+        elif "перемотай вперёд" in text:
+            return "forward", None
+        elif "перемотай назад" in text:
+            return "backward", None
+        elif "следующая серия" in text:
+            return "next", None
+        elif "предыдущая серия" in text:
+            return "previous", None
+        return None, None
