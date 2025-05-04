@@ -244,27 +244,29 @@ def send_input_key(vk_code):
             if win32gui.IsIconic(hwnd):
                 win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
             
-            # Пробуем разные способы активации окна
+            # Пробуем активировать окно всеми способами
             try:
                 win32gui.SetForegroundWindow(hwnd)
             except:
                 try:
                     win32gui.BringWindowToTop(hwnd)
+                    win32gui.SetFocus(hwnd)
                 except:
                     pass
             
-            time.sleep(0.5)
+            time.sleep(0.3)  # Увеличиваем задержку
             
-            # Отправляем клавишу через keybd_event
+            # 1. Отправляем через keybd_event с скан-кодом
             scan_code = win32api.MapVirtualKey(vk_code, 0)
             win32api.keybd_event(vk_code, scan_code, 0, 0)
             time.sleep(0.1)
             win32api.keybd_event(vk_code, scan_code, win32con.KEYEVENTF_KEYUP, 0)
             
-            # Дополнительно отправляем через PostMessage
-            win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
+            # 2. Отправляем через PostMessage с lparam
+            lparam = (scan_code << 16) | 1
+            win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, lparam)
             time.sleep(0.1)
-            win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
+            win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk_code, lparam | (1 << 30))
             
             return True
             
@@ -276,38 +278,38 @@ def send_input_key(vk_code):
         logger.error(f"Ошибка общая: {e}")
         return False
 
-# Обновляем обработчики кнопок управления
+# Обновляем обработчики кнопок управления с правильными кодами клавиш
 @dp.message(F.text == "⏸ Пауза/Продолжить")
 async def toggle_pause(message: types.Message):
-    if send_input_key(0x20):  # VK_SPACE
+    if send_input_key(win32con.VK_SPACE):  # Пробел
         await message.answer("⏸ Переключение паузы")
     else:
         await message.answer("❌ Не удалось найти окно с видео")
 
 @dp.message(F.text == "⏩ Вперед 10 сек")
 async def forward_10(message: types.Message):
-    if send_input_key(0x27):  # VK_RIGHT
+    if send_input_key(win32con.VK_RIGHT):  # Стрелка вправо
         await message.answer("⏩ Перемотка вперед")
     else:
         await message.answer("❌ Не удалось найти окно с видео")
 
 @dp.message(F.text == "⏪ Назад 10 сек")
 async def backward_10(message: types.Message):
-    if send_input_key(0x25):  # VK_LEFT
+    if send_input_key(win32con.VK_LEFT):  # Стрелка влево
         await message.answer("⏪ Перемотка назад")
     else:
         await message.answer("❌ Не удалось найти окно с видео")
 
 @dp.message(F.text == "⬅️ Предыдущая серия")
 async def previous_episode(message: types.Message):
-    if send_input_key(0x50):  # 'P'
+    if send_input_key(ord('P')):  # Клавиша P
         await message.answer("⬅️ Включена предыдущая серия")
     else:
         await message.answer("❌ Не удалось найти окно с видео")
 
 @dp.message(F.text == "➡️ Следующая серия")
 async def next_episode(message: types.Message):
-    if send_input_key(0x4E):  # 'N'
+    if send_input_key(ord('N')):  # Клавиша N
         await message.answer("➡️ Включена следующая серия")
     else:
         await message.answer("❌ Не удалось найти окно с видео")
@@ -405,73 +407,45 @@ voice_handler = VoiceHandler()
 @dp.message(F.voice)
 async def handle_voice(message: types.Message, state: FSMContext):
     try:
-        # Сообщаем пользователю о начале обработки
+        # Сообщаем о начале обработки
         processing_msg = await message.answer("🎧 Обрабатываю голосовое сообщение...")
         
+        # Получаем файл голосового сообщения
         file_id = message.voice.file_id
         file = await bot.get_file(file_id)
         file_path = file.file_path
         
-        # Создаем временную директорию если её нет
+        # Создаем временную директорию
         os.makedirs("temp", exist_ok=True)
         voice_path = os.path.join("temp", f"voice_{message.message_id}.ogg")
         
         try:
+            # Скачиваем файл
             await bot.download_file(file_path, voice_path)
             
-            audio = sr.AudioFile(voice_path)
-            with audio as source:
-                audio_data = voice_handler.recognizer.record(source)
-            
-            text = voice_handler.recognize_command(audio_data)
+            # Распознаем команду
+            text = voice_handler.recognize_command(voice_path)
             
             if not text:
-                await processing_msg.edit_text("❌ Не удалось распознать команду")
+                await processing_msg.edit_text("❌ Не удалось распознать команду. Пожалуйста, повторите.")
                 return
-                
-            # Парсим команду до обработки
+            
+            # Логируем распознанный текст
+            logger.info(f"Распознан текст: {text}")
+            await processing_msg.edit_text(f"✅ Распознано: {text}")
+            
+            # Парсим команду
             command, query = voice_handler.parse_command(text)
             
-            # Продолжаем обработку команды...
-            current_state = await state.get_state()
-            if current_state == "SearchStates:waiting_for_choice":
-                if command == "select" and isinstance(query, int):
-                    user_results = search_results.get(message.from_user.id, [])
-                    if 1 <= query <= len(user_results):
-                        selected_video = user_results[query - 1]
-                        video_id = selected_video.get('id', '')
-                        if video_id:
-                            await process_anime_selection_voice(message, video_id)
-                            await state.clear()
-                            search_results.pop(message.from_user.id, None)
-                            return
-                    else:
-                        await message.answer("❌ Неверный номер. Пожалуйста, выберите существующий вариант.")
-                        return
-
-            # Обрабатываем команды
-            if command == "search":
-                results = voice_handler.search_anime(query)
-                if results:
-                    search_results[message.from_user.id] = results
-                    await state.set_state(SearchStates.waiting_for_choice)
-            elif command == "forward":
-                if send_input_key(0x27):  # VK_RIGHT
-                    await message.answer("⏩ Перемотка вперед")
-            elif command == "backward":
-                if send_input_key(0x25):  # VK_LEFT
-                    await message.answer("⏪ Перемотка назад")
-            elif command == "next":
-                if send_input_key(0x4E):  # 'N'
-                    await message.answer("➡️ Включена следующая серия")
-            elif command == "previous":
-                if send_input_key(0x50):  # 'P'
-                    await message.answer("⬅️ Включена предыдущая серия")
-            else:
-                await message.answer("❌ Неизвестная команда")
-                
+            if not command:
+                await message.answer("❓ Не поняла команду. Попробуйте еще раз.")
+                return
+            
+            # Обрабатываем команду
+            await process_voice_command(message, command, query, state)
+            
         finally:
-            # Удаляем временный файл
+            # Удаляем временные файлы
             try:
                 if os.path.exists(voice_path):
                     os.remove(voice_path)
@@ -481,6 +455,47 @@ async def handle_voice(message: types.Message, state: FSMContext):
     except Exception as e:
         logger.error(f"Ошибка обработки голосового сообщения: {e}")
         await message.answer("❌ Произошла ошибка при обработке голосового сообщения")
+
+async def process_voice_command(message: types.Message, command: str, query: str, state: FSMContext):
+    """Отдельная функция для обработки распознанных голосовых команд"""
+    try:
+        if command == "search":
+            results = voice_handler.search_anime(query)
+            if results:
+                search_results[message.from_user.id] = results
+                await state.set_state(SearchStates.waiting_for_choice)
+        elif command == "select":
+            current_state = await state.get_state()
+            if current_state == "SearchStates:waiting_for_choice":
+                user_results = search_results.get(message.from_user.id, [])
+                if 1 <= query <= len(user_results):
+                    selected_video = user_results[query - 1]
+                    video_id = selected_video.get('id', '')
+                    if video_id:
+                        await process_anime_selection_voice(message, video_id)
+                        await state.clear()
+                        search_results.pop(message.from_user.id, None)
+                        return
+                await message.answer("❌ Неверный номер. Пожалуйста, выберите существующий вариант.")
+        else:
+            # Медиа команды
+            command_map = {
+                "forward": (0x27, "⏩ Перемотка вперед"),
+                "backward": (0x25, "⏪ Перемотка назад"),
+                "next": (0x4E, "➡️ Следующая серия"),
+                "previous": (0x50, "⬅️ Предыдущая серия")
+            }
+            
+            if command in command_map:
+                key_code, message_text = command_map[command]
+                if send_input_key(key_code):
+                    await message.answer(message_text)
+                else:
+                    await message.answer("❌ Не удалось выполнить команду")
+            
+    except Exception as e:
+        logger.error(f"Ошибка обработки команды {command}: {e}")
+        await message.answer("❌ Ошибка при выполнении команды")
 
 async def process_anime_selection_voice(message: types.Message, video_id: str):
     try:

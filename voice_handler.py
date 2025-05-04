@@ -4,6 +4,10 @@ import json
 import requests
 from fake_useragent import UserAgent
 import logging
+import soundfile as sf
+import numpy as np
+from pydub import AudioSegment
+import os
 from speech_config import SPEECH_RECOGNITION_SETTINGS, VOICE_COMMANDS
 
 logger = logging.getLogger(__name__)
@@ -12,39 +16,63 @@ class VoiceHandler:
     def __init__(self):
         self.recognizer = sr.Recognizer()
         self.engine = pyttsx3.init()
-        # Настройка распознавания
-        self.recognizer.energy_threshold = 300  # Увеличиваем чувствительность
+        # Оптимизированные настройки для распознавания
+        self.recognizer.energy_threshold = 4000
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.pause_threshold = 0.8  # Уменьшаем паузу между словами
-        # Настройка голоса
-        self.engine.setProperty('rate', 180)
-        self.engine.setProperty('volume', 0.9)
+        self.recognizer.dynamic_energy_adjustment_damping = 0.15
+        self.recognizer.dynamic_energy_ratio = 1.5
+        self.recognizer.pause_threshold = 0.5
+        self.recognizer.operation_timeout = None
+        self.recognizer.phrase_threshold = 0.3
+        self.recognizer.non_speaking_duration = 0.5
 
-    def recognize_command(self, audio_data):
+    def convert_ogg_to_wav(self, ogg_path):
+        """Конвертирует ogg в wav для лучшего распознавания"""
+        wav_path = ogg_path.replace('.ogg', '.wav')
+        audio = AudioSegment.from_ogg(ogg_path)
+        audio.export(wav_path, format='wav')
+        return wav_path
+
+    def recognize_command(self, audio_file_path):
         try:
-            # Увеличиваем громкость аудио
-            audio_data.adjust_for_ambient_noise(audio_data)
+            # Конвертируем в WAV для лучшего распознавания
+            wav_path = self.convert_ogg_to_wav(audio_file_path)
             
-            text = self.recognizer.recognize_google(
-                audio_data,
-                language='ru-RU',
-                show_all=False  # Изменяем на False для получения строки
-            )
-            
-            if text:
-                logger.debug(f"Распознанный текст: {text}")
-                return text.lower()
-            return None
+            with sr.AudioFile(wav_path) as source:
+                # Настраиваем устранение шума
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                # Записываем аудио
+                audio = self.recognizer.record(source)
                 
-        except sr.UnknownValueError:
-            logger.error("Не удалось распознать речь")
-            return None
-        except sr.RequestError as e:
-            logger.error(f"Ошибка сервиса распознавания речи: {e}")
-            return None
+                # Пробуем разные API для распознавания
+                try:
+                    text = self.recognizer.recognize_google(
+                        audio,
+                        language='ru-RU'
+                    )
+                    logger.info(f"Распознан текст: {text}")
+                    return text.lower()
+                except:
+                    try:
+                        # Пробуем Sphinx как запасной вариант
+                        text = self.recognizer.recognize_sphinx(
+                            audio,
+                            language='ru-RU'
+                        )
+                        logger.info(f"Распознан текст (sphinx): {text}")
+                        return text.lower()
+                    except:
+                        return None
         except Exception as e:
-            logger.error(f"Неизвестная ошибка при распознавании: {e}")
+            logger.error(f"Ошибка распознавания: {e}")
             return None
+        finally:
+            # Очищаем временные файлы
+            try:
+                if os.path.exists(wav_path):
+                    os.remove(wav_path)
+            except:
+                pass
 
     def speak(self, text):
         try:
@@ -99,26 +127,35 @@ class VoiceHandler:
         if not text:
             return None, None
             
-        # Проверяем числа для выбора варианта
-        if text.strip().isdigit() or any(word in text.lower() for word in ['один', 'два', 'три', 'четыре', 'пять']):
-            number_map = {
-                'один': 1, 'два': 2, 'три': 3, 'четыре': 4, 'пять': 5,
-                '1': 1, '2': 2, '3': 3, '4': 4, '5': 5
-            }
-            for word, num in number_map.items():
-                if word in text.lower():
-                    return "select", num
-            return "select", int(text.strip())
-            
-        # Проверяем команды из конфига
-        for command, phrases in VOICE_COMMANDS.items():
-            if any(phrase in text for phrase in phrases):
-                if command == "search":
-                    # Извлекаем название аниме после команды поиска
-                    for phrase in phrases:
-                        if phrase in text:
-                            query = text.replace(phrase, "").strip()
-                            return command, query
-                return command, None
+        logger.info(f"Парсинг команды из текста: {text}")
+        # Преобразуем текст в нижний регистр и удаляем лишние пробелы
+        text = text.lower().strip()
+        
+        # Сначала проверяем числа
+        number_words = {
+            'один': 1, 'первый': 1, 'первое': 1, 'первая': 1,
+            'два': 2, 'второй': 2, 'второе': 2, 'вторая': 2,
+            'три': 3, 'третий': 3, 'третье': 3, 'третья': 3,
+            'четыре': 4, 'четвертый': 4, 'четвертое': 4, 'четвертая': 4,
+            'пять': 5, 'пятый': 5, 'пятое': 5, 'пятая': 5,
+            '1': 1, '2': 2, '3': 3, '4': 4, '5': 5
+        }
+        
+        for word, num in number_words.items():
+            if word in text:
+                logger.info(f"Распознан выбор номера: {num}")
+                return "select", num
                 
+        # Проверяем команды
+        for command, phrases in VOICE_COMMANDS.items():
+            for phrase in phrases:
+                if phrase in text:
+                    if command == "search":
+                        query = text.replace(phrase, "").strip()
+                        logger.info(f"Распознана команда поиска: {query}")
+                        return command, query
+                    logger.info(f"Распознана команда: {command}")
+                    return command, None
+        
+        logger.warning(f"Команда не распознана: {text}")
         return None, None
