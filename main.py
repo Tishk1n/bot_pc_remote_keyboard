@@ -15,6 +15,7 @@ import win32gui
 import win32con
 import win32api
 from fake_useragent import UserAgent
+import logging
 
 # Инициализация бота и диспетчера
 bot = Bot(token=TOKEN)
@@ -112,11 +113,24 @@ def send_key(key):
             win32api.keybd_event(key, 0, win32con.KEYEVENTF_KEYUP, 0)
 
 # Обновляем обработчики кнопок
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+def send_key_combination(vk_code):
+    """Отправка нажатия клавиши с учетом особенностей медиаплеера"""
+    try:
+        hwnd = win32gui.GetForegroundWindow()
+        win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
+        win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке клавиши: {e}")
+
 @dp.message(F.text == "⏸ Пауза/Продолжить")
 async def toggle_pause(message: types.Message):
     db.log_command(message.from_user.id, "pause_play")
-    send_key(win32con.VK_SPACE)
-    await message.answer("⏸ Пауза/Продолжить воспроизведение")
+    # Используем код клавиши пробел (32)
+    send_key_combination(win32con.VK_SPACE)
+    await message.answer("⏸ Переключение паузы")
 
 @dp.message(F.text == "⏩ Вперед 10 сек")
 async def forward_10(message: types.Message):
@@ -154,46 +168,49 @@ async def process_title(message: types.Message, state: FSMContext):
     
     await message.answer(f"🔍 {hitalic('Ищу аниме')} {hbold(search_query)}...", parse_mode="HTML")
     
-    # Настройка запроса
-    ua = UserAgent()
-    headers = {
-        'User-Agent': ua.random,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
-        'Connection': 'keep-alive',
-    }
+    try:
+        # Настройка запроса
+        ua = UserAgent()
+        headers = {
+            'User-Agent': ua.random,
+            'Accept': 'text/html',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+            'Referer': 'https://rutube.ru/',
+            'DNT': '1',
+        }
+        
+        url = f"https://rutube.ru/api/search/video/?query={search_query}+аниме"
+        response = requests.get(url, headers=headers)
+        logger.debug(f"API ответ: {response.text[:200]}...")  # логируем часть ответа
+        
+        data = response.json()
+        results = data.get('results', [])
+        
+        if not results:
+            await message.answer("❌ Ничего не найдено. Попробуйте другой запрос.")
+            await state.clear()
+            return
+
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        
+        for result in results[:5]:
+            title = result.get('title', '').strip()
+            link = f"https://rutube.ru/video/{result.get('id', '')}/"
+            
+            if title and link:
+                keyboard.add(InlineKeyboardButton(
+                    text=f"🎬 {title[:50]}...", 
+                    callback_data=f"anime:{link}:{title[:50]}"
+                ))
+
+        await message.answer("🎯 Найденные аниме:", reply_markup=keyboard)
+
+    except Exception as e:
+        logger.error(f"Ошибка при поиске: {e}")
+        await message.answer("❌ Произошла ошибка при поиске. Попробуйте позже.")
     
-    url = f"https://rutube.ru/search/?query={search_query}+аниме"
-    response = requests.get(url, headers=headers)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # Обновленные селекторы для поиска
-    results = soup.find_all('div', {'class': ['video-card', 'search-item', 'video-item']})
-    
-    if not results:
-        await message.answer("❌ Ничего не найдено. Попробуйте другой запрос.")
+    finally:
         await state.clear()
-        return
-
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    
-    for result in results[:5]:
-        title_elem = result.find(['a', 'div'], {'class': ['video-card__link', 'search-item__title', 'video-item__title']})
-        if not title_elem:
-            continue
-            
-        title = title_elem.get_text().strip()
-        link = title_elem.get('href', '')
-        if not link.startswith('http'):
-            link = "https://rutube.ru" + link
-            
-        keyboard.add(InlineKeyboardButton(
-            text=f"🎬 {title[:50]}...", 
-            callback_data=f"anime:{link}:{title[:50]}"
-        ))
-
-    await message.answer("🎯 Найденные аниме:", reply_markup=keyboard)
-    await state.clear()
 
 @dp.callback_query(lambda c: c.data.startswith('anime:'))
 async def process_anime_selection(callback_query: types.CallbackQuery):
