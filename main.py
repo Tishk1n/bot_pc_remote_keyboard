@@ -16,6 +16,8 @@ import win32con
 import win32api
 from fake_useragent import UserAgent
 import logging
+from ctypes import Structure, c_ulong, c_ushort, c_short, POINTER, windll, Union, c_void_p, sizeof, cast, pointer
+import time
 
 # Инициализация бота и диспетчера
 bot = Bot(token=TOKEN)
@@ -112,36 +114,86 @@ def send_key(key):
             win32api.keybd_event(key, 0, 0, 0)
             win32api.keybd_event(key, 0, win32con.KEYEVENTF_KEYUP, 0)
 
+# Добавляем структуры для SendInput
+LONG = c_long = int
+
+class MOUSEINPUT(Structure):
+    _fields_ = [
+        ("dx", LONG),
+        ("dy", LONG),
+        ("mouseData", c_ulong),
+        ("dwFlags", c_ulong),
+        ("time", c_ulong),
+        ("dwExtraInfo", POINTER(c_ulong))
+    ]
+
+class KEYBDINPUT(Structure):
+    _fields_ = [
+        ("wVk", c_ushort),
+        ("wScan", c_ushort),
+        ("dwFlags", c_ulong),
+        ("time", c_ulong),
+        ("dwExtraInfo", POINTER(c_ulong))
+    ]
+
+class HARDWAREINPUT(Structure):
+    _fields_ = [
+        ("uMsg", c_ulong),
+        ("wParamL", c_short),
+        ("wParamH", c_ushort)
+    ]
+
+class _INPUT_UNION(Union):
+    _fields_ = [
+        ("mi", MOUSEINPUT),
+        ("ki", KEYBDINPUT),
+        ("hi", HARDWAREINPUT)
+    ]
+
+class INPUT(Structure):
+    _fields_ = [
+        ("type", c_ulong),
+        ("union", _INPUT_UNION)
+    ]
+
+def send_key_press(key_code):
+    """Отправка нажатия клавиши через SendInput"""
+    try:
+        extra = c_ulong(0)
+        ii_ = INPUT_UNION()
+        ii_.ki = KEYBDINPUT(key_code, 0, 0, 0, pointer(extra))
+        x = INPUT(c_ulong(1), ii_)
+        windll.user32.SendInput(1, pointer(x), sizeof(x))
+        
+        time.sleep(0.1)  # Небольшая задержка между нажатием и отпусканием
+        
+        ii_.ki = KEYBDINPUT(key_code, 0, 0x0002, 0, pointer(extra))  # KEYEVENTF_KEYUP
+        x = INPUT(c_ulong(1), ii_)
+        windll.user32.SendInput(1, pointer(x), sizeof(x))
+        
+    except Exception as e:
+        logger.error(f"Ошибка при отправке клавиши через SendInput: {e}")
+
 # Обновляем обработчики кнопок
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-def send_key_combination(vk_code):
-    """Отправка нажатия клавиши с учетом особенностей медиаплеера"""
-    try:
-        hwnd = win32gui.GetForegroundWindow()
-        win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
-        win32api.SendMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
-    except Exception as e:
-        logger.error(f"Ошибка при отправке клавиши: {e}")
-
 @dp.message(F.text == "⏸ Пауза/Продолжить")
 async def toggle_pause(message: types.Message):
     db.log_command(message.from_user.id, "pause_play")
-    # Используем код клавиши пробел (32)
-    send_key_combination(win32con.VK_SPACE)
+    send_key_press(0x20)  # VK_SPACE
     await message.answer("⏸ Переключение паузы")
 
 @dp.message(F.text == "⏩ Вперед 10 сек")
 async def forward_10(message: types.Message):
     db.log_command(message.from_user.id, "forward")
-    send_key(win32con.VK_RIGHT)
+    send_key_press(0x27)  # VK_RIGHT
     await message.answer("⏩ Перемотка вперед на 10 секунд")
 
 @dp.message(F.text == "⏪ Назад 10 сек")
 async def backward_10(message: types.Message):
     db.log_command(message.from_user.id, "backward")
-    send_key(win32con.VK_LEFT)
+    send_key_press(0x25)  # VK_LEFT
     await message.answer("⏪ Перемотка назад на 10 секунд")
 
 @dp.message(F.text == "⬅️ Предыдущая серия")
@@ -191,18 +243,27 @@ async def process_title(message: types.Message, state: FSMContext):
             await state.clear()
             return
 
-        keyboard = InlineKeyboardMarkup(row_width=1)
-        
+        buttons = []
+        row = []
         for result in results[:5]:
             title = result.get('title', '').strip()
             link = f"https://rutube.ru/video/{result.get('id', '')}/"
             
             if title and link:
-                keyboard.add(InlineKeyboardButton(
-                    text=f"🎬 {title[:50]}...", 
-                    callback_data=f"anime:{link}:{title[:50]}"
-                ))
-
+                row.append(
+                    InlineKeyboardButton(
+                        text=f"🎬 {title[:50]}...", 
+                        callback_data=f"anime:{link}:{title[:50]}"
+                    )
+                )
+                if len(row) == 1:  # По одной кнопке в строке
+                    buttons.append(row)
+                    row = []
+        
+        if row:  # Добавляем оставшиеся кнопки
+            buttons.append(row)
+            
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
         await message.answer("🎯 Найденные аниме:", reply_markup=keyboard)
 
     except Exception as e:
