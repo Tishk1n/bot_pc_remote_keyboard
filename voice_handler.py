@@ -22,26 +22,20 @@ class VoiceHandler:
 
     def recognize_command(self, audio_data):
         try:
+            # Увеличиваем громкость аудио
+            audio_data.adjust_for_ambient_noise(audio_data)
+            
             text = self.recognizer.recognize_google(
                 audio_data,
-                language=SPEECH_RECOGNITION_SETTINGS['language'],
-                show_all=True  # Получаем все варианты распознавания
+                language='ru-RU',
+                show_all=False  # Изменяем на False для получения строки
             )
             
-            if not text:
-                return None
-                
-            # Если получили список альтернатив
-            if isinstance(text, dict) and 'alternative' in text:
-                # Берем наиболее вероятный вариант
-                return text['alternative'][0]['transcript'].lower()
-            
-            # Если получили просто строку
-            if isinstance(text, str):
+            if text:
+                logger.debug(f"Распознанный текст: {text}")
                 return text.lower()
-                
             return None
-            
+                
         except sr.UnknownValueError:
             logger.error("Не удалось распознать речь")
             return None

@@ -160,24 +160,6 @@ class INPUT(Structure):
         ("union", INPUT_UNION),
     )
 
-def send_key_press(key_code):
-    """Отправка нажатия клавиши через SendInput"""
-    try:
-        extra = c_ulong(0)
-        ii_ = INPUT_UNION()
-        ii_.ki = KEYBDINPUT(key_code, 0, 0, 0, byref(extra))
-        x = INPUT(c_ulong(1), ii_)
-        windll.user32.SendInput(1, byref(x), sizeof(x))
-        
-        time.sleep(0.1)  # Небольшая задержка между нажатием и отпусканием
-        
-        ii_.ki = KEYBDINPUT(key_code, 0, 0x0002, 0, byref(extra))  # KEYEVENTF_KEYUP
-        x = INPUT(c_ulong(1), ii_)
-        windll.user32.SendInput(1, byref(x), sizeof(x))
-        
-    except Exception as e:
-        logger.error(f"Ошибка при отправке клавиши через SendInput: {e}")
-
 def send_media_key(key_code):
     """Отправка клавиш в медиаплеер"""
     try:
@@ -226,27 +208,21 @@ def find_video_window():
                                  'видео', 'video', 'anime', 'аниме', 'серия', 'episode']
                     if any(x in title for x in search_terms):
                         windows.append(hwnd)
-                        return False
                 except Exception:
                     pass
             return True
-
-        # Сначала ищем по конкретному заголовку
-        hwnd = win32gui.FindWindow(None, "Rutube")
-        if hwnd and win32gui.IsWindowVisible(hwnd):
-            return hwnd
-
-        # Если не нашли, ищем среди всех окон
+        
         windows = []
         win32gui.EnumWindows(callback, windows)
         
-        # Если нашли хотя бы одно окно, возвращаем первое
-        if windows:
-            return windows[0]
-            
-        # Если все еще не нашли, пробуем найти по классу окна
+        # Если нашли окна, возвращаем первое активное
+        for hwnd in windows:
+            if win32gui.IsWindowVisible(hwnd):
+                return hwnd
+                
+        # Пробуем найти по классу окна
         hwnd = win32gui.FindWindow("Chrome_WidgetWin_1", None)
-        if hwnd:
+        if hwnd and win32gui.IsWindowVisible(hwnd):
             return hwnd
             
         return None
@@ -265,42 +241,39 @@ def send_input_key(vk_code):
             
         try:
             # Активируем окно
-            if win32gui.IsIconic(hwnd):  # Если окно свернуто
+            if win32gui.IsIconic(hwnd):
                 win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-            win32gui.SetForegroundWindow(hwnd)
-            time.sleep(0.5)  # Ждем активации окна
             
-            # Отправляем клавишу разными способами
-            # 1. Через SendInput
+            # Пробуем разные способы активации окна
+            try:
+                win32gui.SetForegroundWindow(hwnd)
+            except:
+                try:
+                    win32gui.BringWindowToTop(hwnd)
+                except:
+                    pass
+            
+            time.sleep(0.5)
+            
+            # Отправляем клавишу через keybd_event
             scan_code = win32api.MapVirtualKey(vk_code, 0)
-            extra = c_ulong(0)
-            ii_ = INPUT_UNION()
-            ii_.ki = KEYBDINPUT(vk_code, scan_code, 0, 0, pointer(extra))
-            x = INPUT(c_ulong(1), ii_)
-            windll.user32.SendInput(1, pointer(x), sizeof(x))
-            time.sleep(0.1)
-            ii_.ki = KEYBDINPUT(vk_code, scan_code, 0x0002, 0, pointer(extra))
-            x = INPUT(c_ulong(1), ii_)
-            windll.user32.SendInput(1, pointer(x), sizeof(x))
-            
-            # 2. Через PostMessage
-            win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
-            time.sleep(0.1)
-            win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
-            
-            # 3. Через keybd_event
             win32api.keybd_event(vk_code, scan_code, 0, 0)
             time.sleep(0.1)
             win32api.keybd_event(vk_code, scan_code, win32con.KEYEVENTF_KEYUP, 0)
             
+            # Дополнительно отправляем через PostMessage
+            win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, vk_code, 0)
+            time.sleep(0.1)
+            win32api.PostMessage(hwnd, win32con.WM_KEYUP, vk_code, 0)
+            
             return True
             
         except Exception as e:
-            logger.error(f"Ошибка активации окна: {e}")
+            logger.error(f"Ошибка отправки клавиши: {e}")
             return False
             
     except Exception as e:
-        logger.error(f"Ошибка отправки клавиши: {e}")
+        logger.error(f"Ошибка общая: {e}")
         return False
 
 # Обновляем обработчики кнопок управления
