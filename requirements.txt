@@ -1,18 +1,13 @@
-aiogram>=3.0.0
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-aiosqlite>=0.19.0
-python-dotenv>=1.0.0
-pyautogui>=0.9.54
-pywin32>=305
-fake-useragent>=1.1.1
-speech_recognition>=3.10.0
-pyttsx3>=2.90
-sounddevice>=0.4.6
-scipy>=1.11.3
-vosk>=0.3.45
-pydub>=0.25.1
-SpeechRecognition>=3.10.0
-pocketsphinx>=5.0.2
-soundfile>=0.12.1
-numpy>=1.24.0
+# Для macOS: перед установкой pyaudio выполните
+# brew install portaudio
+# затем pip install pyaudio
+speechrecognition
+pyaudio
+requests
+pyobjc-framework-Quartz
+pyobjc-framework-ScriptingBridge
+opencv-python
+numpy
+gTTS
+playsound
+pyautogui
