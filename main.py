@@ -172,6 +172,38 @@ def send_key_press(key_code):
     except Exception as e:
         logger.error(f"Ошибка при отправке клавиши через SendInput: {e}")
 
+def send_media_key(key_code):
+    """Отправка клавиш в медиаплеер"""
+    try:
+        # Находим окно браузера
+        hwnd = win32gui.FindWindow(None, "Rutube")
+        if not hwnd:
+            # Если не нашли по имени Rutube, ищем по содержимому заголовка
+            def callback(hwnd, windows):
+                if win32gui.IsWindowVisible(hwnd):
+                    title = win32gui.GetWindowText(hwnd).lower()
+                    if 'rutube' in title:
+                        windows.append(hwnd)
+                return True
+            
+            windows = []
+            win32gui.EnumWindows(callback, windows)
+            if windows:
+                hwnd = windows[0]
+        
+        if hwnd:
+            win32gui.SetForegroundWindow(hwnd)
+            time.sleep(0.1)  # Даем окну время стать активным
+            
+            # Отправляем виртуальный код клавиши
+            win32api.PostMessage(hwnd, win32con.WM_KEYDOWN, key_code, 0)
+            time.sleep(0.05)
+            win32api.PostMessage(hwnd, win32con.WM_KEYUP, key_code, 0)
+            return True
+    except Exception as e:
+        logger.error(f"Ошибка при отправке медиа-клавиши: {e}")
+    return False
+
 # Обновляем обработчики кнопок
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -179,31 +211,31 @@ logger = logging.getLogger(__name__)
 @dp.message(F.text == "⏸ Пауза/Продолжить")
 async def toggle_pause(message: types.Message):
     db.log_command(message.from_user.id, "pause_play")
-    send_key_press(0x20)  # VK_SPACE
+    send_media_key(0x20)  # VK_SPACE
     await message.answer("⏸ Переключение паузы")
 
 @dp.message(F.text == "⏩ Вперед 10 сек")
 async def forward_10(message: types.Message):
     db.log_command(message.from_user.id, "forward")
-    send_key_press(0x27)  # VK_RIGHT
+    send_media_key(0x27)  # VK_RIGHT
     await message.answer("⏩ Перемотка вперед на 10 секунд")
 
 @dp.message(F.text == "⏪ Назад 10 сек")
 async def backward_10(message: types.Message):
     db.log_command(message.from_user.id, "backward")
-    send_key_press(0x25)  # VK_LEFT
+    send_media_key(0x25)  # VK_LEFT
     await message.answer("⏪ Перемотка назад на 10 секунд")
 
 @dp.message(F.text == "⬅️ Предыдущая серия")
 async def previous_episode(message: types.Message):
     db.log_command(message.from_user.id, "previous_episode")
-    send_key('P')
+    send_media_key('P')
     await message.answer("⬅️ Включена предыдущая серия")
 
 @dp.message(F.text == "➡️ Следующая серия")
 async def next_episode(message: types.Message):
     db.log_command(message.from_user.id, "next_episode")
-    send_key('N')
+    send_media_key('N')
     await message.answer("➡️ Включена следующая серия")
 
 @dp.message(F.text == "🔍 Поиск аниме")
@@ -219,79 +251,70 @@ async def process_title(message: types.Message, state: FSMContext):
     await message.answer(f"🔍 {hitalic('Ищу аниме')} {hbold(search_query)}...", parse_mode="HTML")
     
     try:
-        # Настройка запроса
         ua = UserAgent()
         headers = {
             'User-Agent': ua.random,
-            'Accept': 'text/html',
-            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
-            'Referer': 'https://rutube.ru/',
-            'DNT': '1',
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
         }
         
-        url = f"https://rutube.ru/api/search/video/?query={search_query}+аниме"
+        url = f"https://rutube.ru/api/search/video/?query={search_query}+аниме&format=json"
         response = requests.get(url, headers=headers)
-        logger.debug(f"API ответ: {response.text[:200]}...")  # логируем часть ответа
-        
         data = response.json()
-        results = data.get('results', [])
         
-        if not results:
-            await message.answer("❌ Ничего не найдено. Попробуйте другой запрос.")
-            await state.clear()
+        if not data.get('results'):
+            await message.answer("❌ Ничего не найдено.")
             return
 
-        buttons = []
-        row = []
-        for result in results[:5]:
-            title = result.get('title', '').strip()
-            link = f"https://rutube.ru/video/{result.get('id', '')}/"
-            
-            if title and link:
-                row.append(
-                    InlineKeyboardButton(
-                        text=f"🎬 {title[:50]}...", 
-                        callback_data=f"anime:{link}:{title[:50]}"
-                    )
-                )
-                if len(row) == 1:  # По одной кнопке в строке
-                    buttons.append(row)
-                    row = []
-        
-        if row:  # Добавляем оставшиеся кнопки
-            buttons.append(row)
-            
-        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-        await message.answer("🎯 Найденные аниме:", reply_markup=keyboard)
+        # Формируем клавиатуру с результатами
+        keyboard = []
+        for result in data['results'][:5]:
+            title = result.get('title', '').strip()[:50]
+            video_id = result.get('id', '')
+            if title and video_id:
+                # Используем более короткий callback_data
+                keyboard.append([InlineKeyboardButton(
+                    text=f"🎬 {title}",
+                    callback_data=f"v:{video_id}"
+                )])
+
+        await message.answer(
+            "Выберите аниме:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+        )
 
     except Exception as e:
         logger.error(f"Ошибка при поиске: {e}")
-        await message.answer("❌ Произошла ошибка при поиске. Попробуйте позже.")
-    
+        await message.answer("❌ Произошла ошибка при поиске.")
     finally:
         await state.clear()
 
-@dp.callback_query(lambda c: c.data.startswith('anime:'))
+@dp.callback_query(lambda c: c.data.startswith('v:'))
 async def process_anime_selection(callback_query: types.CallbackQuery):
-    data = callback_query.data.split(':')
-    link = data[1]
-    title = data[2]
-    
-    db.log_anime_view(callback_query.from_user.id, title)
-    await callback_query.message.answer(
-        f"▶️ {hbold('Запускаю аниме:')} {hitalic(title)}",
-        parse_mode="HTML"
-    )
-    
-    # Открываем видео в браузере
-    webbrowser.open(link)
-    
-    # Через небольшую задержку включаем полноэкранный режим
-    await asyncio.sleep(3)
-    send_key_press(0x70)  # VK_F1 = 0x70, соответствует клавише F
-    
-    await callback_query.message.answer("Аниме запущено в полноэкранном режиме")
-    await callback_query.answer()
+    try:
+        video_id = callback_query.data.split(':')[1]
+        url = f"https://rutube.ru/video/{video_id}/"
+        
+        # Получаем информацию о видео для логирования
+        api_url = f"https://rutube.ru/api/video/{video_id}/"
+        response = requests.get(api_url)
+        video_data = response.json()
+        title = video_data.get('title', 'Неизвестное видео')
+
+        db.log_anime_view(callback_query.from_user.id, title)
+        await callback_query.message.answer(f"▶️ Запускаю: {title}")
+        
+        webbrowser.open(url)
+        await asyncio.sleep(3)  # Ждем загрузки страницы
+        
+        # Нажимаем F для полноэкранного режима
+        send_media_key(0x46)  # 0x46 - код клавиши F
+        
+        await callback_query.answer()
+        
+    except Exception as e:
+        logger.error(f"Ошибка при запуске видео: {e}")
+        await callback_query.message.answer("❌ Ошибка при запуске видео")
 
 # Запуск бота
 async def main():
