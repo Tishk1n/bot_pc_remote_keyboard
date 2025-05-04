@@ -215,17 +215,32 @@ logger = logging.getLogger(__name__)
 
 def find_video_window():
     """Поиск окна с видео"""
-    def callback(hwnd, windows):
-        if win32gui.IsWindowVisible(hwnd):
-            title = win32gui.GetWindowText(hwnd).lower()
-            if any(x in title for x in ['rutube', 'chrome', 'firefox', 'edge', 'смотреть']):
-                windows.append(hwnd)
-                return False
-        return True
-    
-    windows = []
-    win32gui.EnumWindows(callback, windows)
-    return windows[0] if windows else None
+    try:
+        def callback(hwnd, windows):
+            if win32gui.IsWindowVisible(hwnd):
+                try:
+                    title = win32gui.GetWindowText(hwnd).lower()
+                    if any(x in title for x in ['rutube', 'chrome', 'firefox', 'edge', 'смотреть']):
+                        windows.append(hwnd)
+                        return False
+                except Exception:
+                    pass
+            return True
+        
+        windows = []
+        win32gui.EnumWindows(callback, windows)
+        
+        # Добавляем таймаут
+        start_time = time.time()
+        while not windows and time.time() - start_time < 3:  # 3 секунды таймаут
+            time.sleep(0.1)
+            win32gui.EnumWindows(callback, windows)
+            
+        return windows[0] if windows else None
+        
+    except Exception as e:
+        logger.error(f"Ошибка при поиске окна: {e}")
+        return None
 
 def send_input_key(vk_code):
     """Отправка клавиши через SendInput с учетом скан-кода"""
@@ -396,64 +411,76 @@ voice_handler = VoiceHandler()
 @dp.message(F.voice)
 async def handle_voice(message: types.Message, state: FSMContext):
     try:
-        # Скачиваем голосовое сообщение
+        # Сообщаем пользователю о начале обработки
+        processing_msg = await message.answer("🎧 Обрабатываю голосовое сообщение...")
+        
         file_id = message.voice.file_id
         file = await bot.get_file(file_id)
         file_path = file.file_path
-        await bot.download_file(file_path, "voice_message.ogg")
         
-        # Конвертируем в формат для распознавания
-        audio = sr.AudioFile("voice_message.ogg")
-        with audio as source:
-            audio_data = voice_handler.recognizer.record(source)
+        # Создаем временную директорию если её нет
+        os.makedirs("temp", exist_ok=True)
+        voice_path = os.path.join("temp", f"voice_{message.message_id}.ogg")
         
-        # Распознаем команду
-        text = voice_handler.recognize_command(audio_data)
-        if not text:
-            await message.answer("❌ Не удалось распознать команду")
-            return
-
-        # Парсим команду
-        command, query = voice_handler.parse_command(text)
-        
-        # Проверяем, ожидаем ли выбор варианта
-        current_state = await state.get_state()
-        if current_state == "SearchStates:waiting_for_choice":
-            if command == "select" and isinstance(query, int):
-                user_results = search_results.get(message.from_user.id, [])
-                if 1 <= query <= len(user_results):
-                    selected_video = user_results[query - 1]
-                    video_id = selected_video.get('id', '')
-                    if video_id:
-                        await process_anime_selection_voice(message, video_id)
-                        await state.clear()
-                        search_results.pop(message.from_user.id, None)
-                        return
-                else:
-                    await message.answer("❌ Неверный номер. Пожалуйста, выберите существующий вариант.")
-                    return
-        
-        if command == "search":
-            results = voice_handler.search_anime(query)
-            if results:
-                # Сохраняем результаты поиска для этого пользователя
-                search_results[message.from_user.id] = results
-                await state.set_state(SearchStates.waiting_for_choice)
-        elif command == "forward":
-            if send_input_key(0x27):  # VK_RIGHT
-                await message.answer("⏩ Перемотка вперед")
-        elif command == "backward":
-            if send_input_key(0x25):  # VK_LEFT
-                await message.answer("⏪ Перемотка назад")
-        elif command == "next":
-            if send_input_key(0x4E):  # 'N'
-                await message.answer("➡️ Включена следующая серия")
-        elif command == "previous":
-            if send_input_key(0x50):  # 'P'
-                await message.answer("⬅️ Включена предыдущая серия")
-        else:
-            await message.answer("❌ Неизвестная команда")
+        try:
+            await bot.download_file(file_path, voice_path)
             
+            audio = sr.AudioFile(voice_path)
+            with audio as source:
+                audio_data = voice_handler.recognizer.record(source)
+            
+            text = voice_handler.recognize_command(audio_data)
+            
+            if not text:
+                await processing_msg.edit_text("❌ Не удалось распознать команду")
+                return
+                
+            # Продолжаем обработку команды...
+            current_state = await state.get_state()
+            if current_state == "SearchStates:waiting_for_choice":
+                if command == "select" and isinstance(query, int):
+                    user_results = search_results.get(message.from_user.id, [])
+                    if 1 <= query <= len(user_results):
+                        selected_video = user_results[query - 1]
+                        video_id = selected_video.get('id', '')
+                        if video_id:
+                            await process_anime_selection_voice(message, video_id)
+                            await state.clear()
+                            search_results.pop(message.from_user.id, None)
+                            return
+                    else:
+                        await message.answer("❌ Неверный номер. Пожалуйста, выберите существующий вариант.")
+                        return
+            
+            if command == "search":
+                results = voice_handler.search_anime(query)
+                if results:
+                    # Сохраняем результаты поиска для этого пользователя
+                    search_results[message.from_user.id] = results
+                    await state.set_state(SearchStates.waiting_for_choice)
+            elif command == "forward":
+                if send_input_key(0x27):  # VK_RIGHT
+                    await message.answer("⏩ Перемотка вперед")
+            elif command == "backward":
+                if send_input_key(0x25):  # VK_LEFT
+                    await message.answer("⏪ Перемотка назад")
+            elif command == "next":
+                if send_input_key(0x4E):  # 'N'
+                    await message.answer("➡️ Включена следующая серия")
+            elif command == "previous":
+                if send_input_key(0x50):  # 'P'
+                    await message.answer("⬅️ Включена предыдущая серия")
+            else:
+                await message.answer("❌ Неизвестная команда")
+                
+        finally:
+            # Удаляем временный файл
+            try:
+                if os.path.exists(voice_path):
+                    os.remove(voice_path)
+            except Exception as e:
+                logger.error(f"Ошибка при удалении временного файла: {e}")
+                
     except Exception as e:
         logger.error(f"Ошибка обработки голосового сообщения: {e}")
         await message.answer("❌ Произошла ошибка при обработке голосового сообщения")

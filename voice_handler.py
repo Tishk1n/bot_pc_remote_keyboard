@@ -14,16 +14,51 @@ class VoiceHandler:
 
     def recognize_command(self, audio_data):
         try:
-            text = self.recognizer.recognize_google(audio_data, language='ru-RU')
-            return text.lower()
+            # Увеличиваем таймаут и добавляем настройки для лучшего распознавания
+            text = self.recognizer.recognize_google(
+                audio_data, 
+                language='ru-RU',
+                show_all=False,
+                with_confidence=True
+            )
+            
+            # Если получили tuple с уверенностью
+            if isinstance(text, tuple):
+                text, confidence = text
+                if confidence < 0.5:  # Если уверенность низкая
+                    return None
+                return text.lower()
+            
+            return text.lower() if text else None
+            
         except sr.UnknownValueError:
+            logger.error("Не удалось распознать речь")
             return None
-        except sr.RequestError:
+        except sr.RequestError as e:
+            logger.error(f"Ошибка сервиса распознавания речи: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Неизвестная ошибка при распознавании: {e}")
             return None
 
     def speak(self, text):
-        self.engine.say(text)
-        self.engine.runAndWait()
+        try:
+            rate = self.engine.getProperty('rate')
+            volume = self.engine.getProperty('volume')
+            
+            # Сохраняем текущие настройки
+            self.engine.setProperty('rate', 175)  # Немного медленнее
+            self.engine.setProperty('volume', 1.0)  # Максимальная громкость
+            
+            self.engine.say(text)
+            self.engine.runAndWait()
+            
+            # Восстанавливаем настройки
+            self.engine.setProperty('rate', rate)
+            self.engine.setProperty('volume', volume)
+            
+        except Exception as e:
+            logger.error(f"Ошибка при озвучивании: {e}")
 
     def search_anime(self, query):
         ua = UserAgent()
