@@ -19,6 +19,7 @@ import logging
 from ctypes import Structure, c_ulong, c_ushort, c_short, POINTER, windll, Union, c_void_p, sizeof, c_long, byref, pointer
 import time
 from voice_handler import VoiceHandler
+import speech_recognition as sr
 
 # Инициализация бота и диспетчера
 bot = Bot(token=TOKEN)
